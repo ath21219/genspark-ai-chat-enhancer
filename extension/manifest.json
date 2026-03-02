@@ -2,7 +2,18 @@
   "manifest_version": 3,
   "name": "Genspark AI Chat Enhancer",
   "version": "1.0.2",
-  "description": "Genspark AIチャットの利便性を向上させるFirefox拡張機能",
+  "description": "Improve Genspark AI chat experience",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "genspark-ai-chat-enhancer@example.org",
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
   "permissions": [
     "storage",
     "tabs",
@@ -28,16 +39,16 @@
         "https://www.genspark.ai/agents*"
       ],
       "js": [
-        "content.js"
+        "content/content.js"
       ],
       "css": [
-        "content.css"
+        "content/content.css"
       ],
       "run_at": "document_idle"
     }
   ],
   "options_ui": {
-    "page": "options.html",
+    "page": "options/options.html",
     "open_in_tab": false
   },
   "icons": {
