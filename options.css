@@ -1,0 +1,179 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: #333;
+  background: #fafafa;
+}
+
+.options-container {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #1f2937;
+}
+
+section {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+fieldset {
+  border: none;
+  padding: 0;
+  margin: 8px 0 0;
+  transition: opacity 0.2s ease;
+}
+
+fieldset:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.option-row:last-child {
+  margin-bottom: 0;
+}
+
+.input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+input[type="range"] {
+  width: 120px;
+}
+
+input[type="number"] {
+  width: 80px;
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 13px;
+  background: #fff;
+  color: #333;
+}
+
+kbd {
+  padding: 2px 8px;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #374151;
+}
+
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#saveBtn {
+  padding: 8px 24px;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+#saveBtn:hover {
+  background: #1d4ed8;
+}
+
+#saveStatus {
+  font-size: 13px;
+  color: #059669;
+}
+
+/* ======================================================
+   ダークモード
+   ====================================================== */
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #e0e0e0;
+    background: #1e1e1e;
+  }
+
+  h1 {
+    border-bottom-color: #404040;
+  }
+
+  h2 {
+    color: #d0d0d0;
+  }
+
+  section {
+    background: #2a2a2a;
+    border-color: #404040;
+  }
+
+  input[type="number"] {
+    background: #333;
+    color: #e0e0e0;
+    border-color: #555;
+  }
+
+  kbd {
+    background: #333;
+    border-color: #555;
+    color: #d0d0d0;
+  }
+
+  #saveBtn {
+    background: #4f7df5;
+  }
+
+  #saveBtn:hover {
+    background: #3b6de6;
+  }
+
+  #saveStatus {
+    color: #34d399;
+  }
+
+  fieldset:disabled {
+    opacity: 0.4;
+  }
+}

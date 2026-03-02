@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <title>Genspark AI Chat Enhancer - 設定</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+
+<body>
+  <div class="options-container">
+    <h1>Genspark AI Chat Enhancer</h1>
+
+    <section>
+      <h2>チャット横幅</h2>
+      <div class="option-row">
+        <label>
+          <input type="checkbox" id="chatWidthEnabled">
+          横幅拡張を有効にする
+        </label>
+      </div>
+      <fieldset id="chatWidthFieldset" disabled>
+        <div class="option-row">
+          <label>
+            <input type="radio" name="chatWidthUnit" value="percent" checked>
+            割合指定
+          </label>
+          <div class="input-group" id="percentGroup">
+            <input type="range" id="chatWidthPercent" min="50" max="100" value="90">
+            <span id="chatWidthPercentValue">90</span>%
+          </div>
+        </div>
+        <div class="option-row">
+          <label>
+            <input type="radio" name="chatWidthUnit" value="pixel">
+            ピクセル指定
+          </label>
+          <div class="input-group" id="pixelGroup">
+            <input type="number" id="chatWidthPixel" min="600" max="3000" step="10" value="1200">
+            px
+          </div>
+        </div>
+      </fieldset>
+    </section>
+
+    <section>
+      <h2>目次 (TOC)</h2>
+      <div class="option-row">
+        <label>
+          <input type="checkbox" id="tocEnabled" checked>
+          フローティング目次を表示
+        </label>
+      </div>
+      <div class="option-row">
+        <span>折り畳みショートカット:</span>
+        <kbd>Alt + T</kbd>
+      </div>
+    </section>
+
+    <div class="save-row">
+      <button id="saveBtn">保存</button>
+      <span id="saveStatus"></span>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+
+</html>
