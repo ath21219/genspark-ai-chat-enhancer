@@ -43,10 +43,10 @@
 
 #gs-enhancer-toc {
   position: fixed;
-  top: 64px;
+  top: 104px;
   right: 8px;
   width: 260px;
-  max-height: calc(100vh - 80px);
+  max-height: calc(100vh - 120px);
   background: #ffffff;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
@@ -60,78 +60,10 @@
   overflow: hidden;
 }
 
-/* --- ダークモード: prefers-color-scheme --- */
-@media (prefers-color-scheme: dark) {
-  #gs-enhancer-toc {
-    background: #2a2a2a;
-    border-color: #404040;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-  }
-
-  #gs-enhancer-toc .gs-toc-toggle {
-    color: #a0a0a0;
-  }
-
-  #gs-enhancer-toc .gs-toc-toggle:hover {
-    background: #404040;
-    color: #fff;
-  }
-
-  #gs-enhancer-toc .gs-toc-item {
-    color: #d0d0d0;
-  }
-
-  #gs-enhancer-toc .gs-toc-item:hover {
-    background: #363636;
-  }
-
-  #gs-enhancer-toc .gs-toc-item.active {
-    background: #333;
-  }
-
-  #gs-enhancer-toc .gs-toc-item.active.user {
-    border-left-color: #60a5fa;
-  }
-
-  #gs-enhancer-toc .gs-toc-item.active.assistant {
-    border-left-color: #34d399;
-  }
-}
-
-/* --- ダークモード: Genspark .dark クラス --- */
 .dark #gs-enhancer-toc {
   background: #2a2a2a;
   border-color: #404040;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-}
-
-.dark #gs-enhancer-toc .gs-toc-toggle {
-  color: #a0a0a0;
-}
-
-.dark #gs-enhancer-toc .gs-toc-toggle:hover {
-  background: #404040;
-  color: #fff;
-}
-
-.dark #gs-enhancer-toc .gs-toc-item {
-  color: #d0d0d0;
-}
-
-.dark #gs-enhancer-toc .gs-toc-item:hover {
-  background: #363636;
-}
-
-.dark #gs-enhancer-toc .gs-toc-item.active {
-  background: #333;
-}
-
-.dark #gs-enhancer-toc .gs-toc-item.active.user {
-  border-left-color: #60a5fa;
-}
-
-.dark #gs-enhancer-toc .gs-toc-item.active.assistant {
-  border-left-color: #34d399;
 }
 
 /* --- 折り畳み --- */
@@ -179,6 +111,15 @@
   transition: transform 0.25s ease;
 }
 
+.dark #gs-enhancer-toc .gs-toc-toggle {
+  color: #a0a0a0;
+}
+
+.dark #gs-enhancer-toc .gs-toc-toggle:hover {
+  background: #404040;
+  color: #fff;
+}
+
 /* --- リスト --- */
 #gs-enhancer-toc .gs-toc-list-wrapper {
   overflow-y: auto;
@@ -221,6 +162,26 @@
   border-left-color: #10b981;
 }
 
+.dark #gs-enhancer-toc .gs-toc-item {
+  color: #d0d0d0;
+}
+
+.dark #gs-enhancer-toc .gs-toc-item:hover {
+  background: #363636;
+}
+
+.dark #gs-enhancer-toc .gs-toc-item.active {
+  background: #333;
+}
+
+.dark #gs-enhancer-toc .gs-toc-item.active.user {
+  border-left-color: #60a5fa;
+}
+
+.dark #gs-enhancer-toc .gs-toc-item.active.assistant {
+  border-left-color: #34d399;
+}
+
 #gs-enhancer-toc .gs-toc-icon {
   flex-shrink: 0;
   font-size: 12px;
@@ -256,4 +217,42 @@
 
 .dark .gs-export-btn:hover {
   background: #404040;
+}
+
+/* --- ダークモード: prefers-color-scheme --- */
+@media (prefers-color-scheme: dark) {
+  #gs-enhancer-toc {
+    background: #2a2a2a;
+    border-color: #404040;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  }
+
+  #gs-enhancer-toc .gs-toc-toggle {
+    color: #a0a0a0;
+  }
+
+  #gs-enhancer-toc .gs-toc-toggle:hover {
+    background: #404040;
+    color: #fff;
+  }
+
+  #gs-enhancer-toc .gs-toc-item {
+    color: #d0d0d0;
+  }
+
+  #gs-enhancer-toc .gs-toc-item:hover {
+    background: #363636;
+  }
+
+  #gs-enhancer-toc .gs-toc-item.active {
+    background: #333;
+  }
+
+  #gs-enhancer-toc .gs-toc-item.active.user {
+    border-left-color: #60a5fa;
+  }
+
+  #gs-enhancer-toc .gs-toc-item.active.assistant {
+    border-left-color: #34d399;
+  }
 }

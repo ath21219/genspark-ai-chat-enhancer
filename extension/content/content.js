@@ -104,13 +104,17 @@
   let tocScrollLocked = false;
 
   function createTocPanel() {
+    tocPanel = document.getElementById("gs-enhancer-toc");
+    if (tocPanel !== null) {
+      tocPanel.remove();
+    }
     tocPanel = document.createElement("div");
     tocPanel.id = "gs-enhancer-toc";
     tocPanel.innerHTML = `
       <div class="gs-toc-header">
         <button class="gs-toc-toggle" title="目次の折り畳み (Alt+T)">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.5"
+            <path d="M6 12L10 8L6 4" stroke="currentColor" stroke-width="1.5"
                   stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
