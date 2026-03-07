@@ -4,7 +4,6 @@
   // ======================================================
   // 定数・設定
   // ======================================================
-
   const SELECTORS = {
     conversationContent: ".conversation-content",
     statementAll:
@@ -14,6 +13,10 @@
     mainInner: ".main-inner.j-chat-agent",
     headerRightTop: ".header-right .top",
     projectNameText: ".project-name .text",
+    // サブエージェント関連
+    usingToolCall: ".using-tool-call",
+    toolCallResultSidebarInner: ".tool-call-result-sidebar-inner",
+    viewToolCallResultButton: ".view-tool-call-result-button",
   };
 
   const TOC_CONFIG = {
@@ -25,6 +28,7 @@
     phase1PollMs: 2000,
     structureDebounceMs: 1000,
     textPollMs: 3000,
+    textPollIdleMs: 8000, // アイドル時はポーリング間隔を延ばす
     uiSetupPollMs: 500,
     uiSetupTimeoutMs: 10000,
     tocClickScrollLockMs: 2000,
@@ -45,7 +49,6 @@
   // ======================================================
   // オプション読み込み・監視
   // ======================================================
-
   async function loadOptions() {
     try {
       const stored = await browser.storage.local.get("options");
@@ -70,7 +73,6 @@
   // ======================================================
   // 1. チャット横幅拡張
   // ======================================================
-
   const CHAT_WIDTH_CLASS = "gs-enhancer-wide-chat";
 
   function applyChatWidth() {
@@ -94,9 +96,57 @@
   }
 
   // ======================================================
-  // 2. チャット目次
+  // パフォーマンス改善
   // ======================================================
 
+  function injectPerformanceStyles() {
+    const styleId = "gs-enhancer-perf-styles";
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = `
+      /* 画面外の会話ステートメントのレンダリングコストを削減 */
+      .conversation-statement {
+        content-visibility: auto;
+        contain-intrinsic-size: auto 300px;
+      }
+
+      /* 折り畳み時はレンダリングを完全にスキップ */
+      .conversation-statement.gs-collapsed-statement > .desc {
+        display: none !important;
+      }
+      .conversation-statement.gs-collapsed-statement {
+        contain: strict;
+        content-visibility: hidden;
+        contain-intrinsic-size: auto 48px;
+      }
+      /* 折り畳みプレビューは常に表示 */
+      .conversation-statement.gs-collapsed-statement > .gs-collapsed-preview {
+        display: flex !important;
+        content-visibility: visible;
+      }
+      /* using-tool-call のボタンが折り畳み時にも機能するように */
+      .conversation-statement.gs-collapsed-statement .using-tool-call .view-tool-call-result-button {
+        pointer-events: auto;
+      }
+
+      /* 画面外のコードブロックのシンタックスハイライト処理を軽減 */
+      .conversation-statement pre code {
+        content-visibility: auto;
+        contain-intrinsic-size: auto 100px;
+      }
+
+      /* 画面外の画像の読み込み抑制補助 */
+      .conversation-statement img:not([loading]) {
+        content-visibility: auto;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  // ======================================================
+  // 2. チャット目次
+  // ======================================================
   let tocPanel = null;
   let tocList = null;
   let tocCollapsed = false;
@@ -106,7 +156,6 @@
   let panelMode = "toc"; // "toc" | "search"
 
   // --- 折り畳み状態管理 ---
-  // key: 目次エントリの先頭 statement DOM 要素, value: true
   const collapsedEntries = new WeakSet();
 
   function createTocPanel() {
@@ -114,34 +163,17 @@
     if (tocPanel !== null) {
       tocPanel.remove();
     }
-
     tocPanel = document.createElement("div");
     tocPanel.id = "gs-enhancer-toc";
     tocPanel.innerHTML = `
       <div class="gs-toc-header">
         <div class="gs-panel-tabs">
-          <button class="gs-panel-tab active" data-mode="toc" title="目次 (Alt+T)">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <rect x="1" y="2" width="3" height="2" rx="0.5"/>
-              <rect x="6" y="2" width="9" height="2" rx="0.5"/>
-              <rect x="1" y="7" width="3" height="2" rx="0.5"/>
-              <rect x="6" y="7" width="9" height="2" rx="0.5"/>
-              <rect x="1" y="12" width="3" height="2" rx="0.5"/>
-              <rect x="6" y="12" width="9" height="2" rx="0.5"/>
-            </svg>
-            目次
-          </button>
-          <button class="gs-panel-tab" data-mode="search" title="検索 (Ctrl+Shift+F)">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <circle cx="6.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.5" fill="none"/>
-              <line x1="9.5" y1="9.5" x2="13" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-            検索
-          </button>
+          <button class="gs-panel-tab active" data-mode="toc">目次</button>
+          <button class="gs-panel-tab" data-mode="search">検索</button>
         </div>
         <button class="gs-toc-toggle" title="折り畳み (Alt+T)">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M10.5 8L6 11V5l4.5 3z"/>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
         </button>
       </div>
@@ -150,30 +182,25 @@
       </div>
       <div class="gs-search-container">
         <div class="gs-search-input-row">
-          <input type="text" class="gs-search-input" placeholder="検索…" spellcheck="false" autocomplete="off">
-          <button class="gs-search-opt-btn" data-opt="case" title="大文字小文字を区別 (Aa)">Aa</button>
-          <button class="gs-search-opt-btn" data-opt="word" title="単語単位で検索 (W)" style="font-style:italic;">W</button>
-          <button class="gs-search-opt-btn" data-opt="regex" title="正規表現 (.*)" style="font-size:10px;">.*</button>
-        </div>
-        <div class="gs-search-toolbar">
-          <label><input type="checkbox" class="gs-search-filter" value="user" checked> 👤</label>
-          <label><input type="checkbox" class="gs-search-filter" value="assistant" checked> 🤖</label>
-          <span class="gs-search-count"></span>
-          <div class="gs-search-nav">
-            <button class="gs-search-nav-btn" data-dir="prev" title="前へ (Shift+Enter)" disabled>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 4L3 9h10L8 4z"/></svg>
-            </button>
-            <button class="gs-search-nav-btn" data-dir="next" title="次へ (Enter)" disabled>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 12l5-5H3l5 5z"/></svg>
-            </button>
+          <input type="text" class="gs-search-input" placeholder="検索…" />
+          <div class="gs-search-options">
+            <button class="gs-search-opt-btn" data-opt="regex" title="正規表現">.*</button>
+            <button class="gs-search-opt-btn" data-opt="case" title="大小区別">Aa</button>
+            <button class="gs-search-opt-btn" data-opt="word" title="単語一致">\\b</button>
           </div>
+        </div>
+        <div class="gs-search-filters">
+          <label><input type="checkbox" class="gs-search-filter" value="user" checked /> 👤</label>
+          <label><input type="checkbox" class="gs-search-filter" value="assistant" checked /> 🤖</label>
+          <span class="gs-search-count"></span>
+          <button class="gs-search-nav-btn" data-dir="prev" disabled>▲</button>
+          <button class="gs-search-nav-btn" data-dir="next" disabled>▼</button>
         </div>
         <div class="gs-search-results-wrapper">
           <ul class="gs-search-results"></ul>
         </div>
       </div>
     `;
-
     tocList = tocPanel.querySelector(".gs-toc-list");
 
     const toggleBtn = tocPanel.querySelector(".gs-toc-toggle");
@@ -203,8 +230,8 @@
     panelMode = mode;
     const tocListWrapper = tocPanel.querySelector(".gs-toc-list-wrapper");
     const searchContainer = tocPanel.querySelector(".gs-search-container");
-
     const tabs = tocPanel.querySelectorAll(".gs-panel-tab");
+
     tabs.forEach((tab) => {
       tab.classList.toggle("active", tab.dataset.mode === mode);
     });
@@ -253,21 +280,16 @@
   function extractStatementText(statement) {
     const isUser = statement.classList.contains("user");
     if (isUser) {
-      // 1. 従来の pre > code からテキストを取得
       const codeEl = statement.querySelector(SELECTORS.userTextContent);
       if (codeEl) {
         const text = codeEl.textContent.trim();
         if (text) return text;
       }
-
-      // 2. .text-content からテキストを取得（ファイル添付時のテキスト部分）
       const textContentEl = statement.querySelector(".text-content");
       if (textContentEl) {
         const text = textContentEl.textContent.trim();
         if (text) return text;
       }
-
-      // 3. テキストがない場合、添付ファイル名をフォールバックとして使用
       const fileNames = statement.querySelectorAll(".file-name");
       if (fileNames.length > 0) {
         const names = Array.from(fileNames)
@@ -277,7 +299,6 @@
           return "\u{1F4CE} " + names.join(", ");
         }
       }
-
       return "";
     } else {
       const mdViewer = statement.querySelector(
@@ -294,29 +315,30 @@
     const isUser = statement.classList.contains("user");
     if (isUser) {
       const elements = [];
-
-      // ファイル名要素を収集
       const fileNames = statement.querySelectorAll(".file-name");
       fileNames.forEach((el) => elements.push(el));
-
-      // テキスト要素: 従来の pre > code
       const codeEl = statement.querySelector(SELECTORS.userTextContent);
       if (codeEl) {
         elements.push(codeEl);
       } else {
-        // ファイル添付時のテキスト部分
         const textContentEl = statement.querySelector(".text-content");
         if (textContentEl) {
           elements.push(textContentEl);
         }
       }
-
       return elements;
     } else {
+      const elements = [];
       const mdViewer = statement.querySelector(
         SELECTORS.assistantTextContent
       );
-      return mdViewer ? [mdViewer] : [];
+      if (mdViewer) elements.push(mdViewer);
+      // サブエージェントのサイドバー内も検索対象に含める
+      const sidebarViewers = statement.querySelectorAll(
+        `${SELECTORS.toolCallResultSidebarInner} .markdown-viewer`
+      );
+      sidebarViewers.forEach((el) => elements.push(el));
+      return elements;
     }
   }
 
@@ -329,15 +351,6 @@
     return count;
   }
 
-  /**
-   * 全 statement を走査し、目次エントリを収集する。
-   * 各エントリは先頭の statement と、同一ターンに属する全 statement の配列を持つ。
-   *
-   * ルール:
-   * - user statement は1つで1ターン
-   * - assistant statement は連続するものをまとめて1ターン
-   *   （ただし目次には最初の assistant のテキストのみ表示）
-   */
   function collectTocEntries() {
     const conversationContent = document.querySelector(
       SELECTORS.conversationContent
@@ -348,12 +361,10 @@
       conversationContent.querySelectorAll(SELECTORS.statementAll)
     );
     const result = [];
-
     let i = 0;
     while (i < statements.length) {
       const statement = statements[i];
       const isUser = statement.classList.contains("user");
-
       if (isUser) {
         result.push({
           isUser: true,
@@ -362,7 +373,6 @@
         });
         i++;
       } else {
-        // assistant: 連続する assistant をまとめる
         const group = [statement];
         let j = i + 1;
         while (j < statements.length && statements[j].classList.contains("assistant")) {
@@ -371,13 +381,12 @@
         }
         result.push({
           isUser: false,
-          element: statement, // 先頭（テキスト抽出・表示用）
-          statements: group,  // ターン全体
+          element: statement,
+          statements: group,
         });
         i = j;
       }
     }
-
     return result;
   }
 
@@ -412,8 +421,10 @@
     }
 
     if (structureChanged) {
+      // DocumentFragment を使って一括DOM操作
       const newList = document.createElement("ul");
       newList.className = "gs-toc-list";
+      const fragment = document.createDocumentFragment();
 
       entries.forEach((entry) => {
         const { isUser, element, statements: stmts } = entry;
@@ -469,9 +480,10 @@
           }, TIMING.tocClickScrollLockMs);
         });
 
-        newList.appendChild(li);
+        fragment.appendChild(li);
       });
 
+      newList.appendChild(fragment);
       tocList.replaceWith(newList);
       tocList = newList;
       setupTocHighlightObserver();
@@ -498,26 +510,18 @@
   // ======================================================
   // 2c. 会話ターン折り畳み（グループ対応）
   // ======================================================
-
-  /**
-   * 複数の statement をまとめて折り畳む。
-   * 先頭の statement にプレビューを表示し、全 statement に折り畳みクラスを付与する。
-   */
   function collapseStatementGroup(stmts, previewText, isUser, leadElement) {
     collapsedEntries.add(leadElement);
 
-    // 全 statement の合計文字数を算出
     let totalChars = 0;
     stmts.forEach((stmt) => {
       totalChars += getStatementCharCount(stmt);
     });
 
-    // 全 statement に折り畳みクラスを付与
     stmts.forEach((stmt) => {
       stmt.classList.add("gs-collapsed-statement");
     });
 
-    // 先頭の statement にプレビューを表示
     const lead = stmts[0];
     let preview = lead.querySelector(".gs-collapsed-preview");
     if (!preview) {
@@ -538,7 +542,9 @@
       preview.appendChild(text);
       preview.appendChild(badge);
 
-      preview.addEventListener("click", () => {
+      preview.addEventListener("click", (e) => {
+        // using-tool-call のボタンクリックを阻害しないよう確認
+        if (e.target.closest(SELECTORS.viewToolCallResultButton)) return;
         expandStatementGroup(stmts, leadElement);
         syncTocToggle(leadElement, true);
       });
@@ -561,9 +567,6 @@
     }
   }
 
-  /**
-   * グループの折り畳みを解除する。
-   */
   function expandStatementGroup(stmts, leadElement) {
     collapsedEntries.delete(leadElement);
     stmts.forEach((stmt) => {
@@ -591,6 +594,79 @@
     }
   }
 
+  // ======================================================
+  // 「エージェントを表示」ボタンの保護
+  // ======================================================
+  /**
+   * 拡張機能のイベントハンドラが、ページ側の「エージェントを表示」ボタンの
+   * クリックイベントを阻害しないようにする。
+   * - document レベルのキャプチャフェーズで using-tool-call 内のクリックを
+   *   拡張側で consume しない
+   * - 折り畳み状態でもボタンを操作可能にする
+   */
+  function setupToolCallButtonProtection() {
+    // キャプチャフェーズで view-tool-call-result-button のクリックを検知し、
+    // 折り畳みがある場合は一時的に展開してボタンを動作可能にする
+    document.addEventListener(
+      "click",
+      (e) => {
+        const btn = e.target.closest(SELECTORS.viewToolCallResultButton);
+        if (!btn) return;
+
+        // 折り畳み中の statement 内のボタンがクリックされた場合
+        const statement = btn.closest(".conversation-statement");
+        if (statement && statement.classList.contains("gs-collapsed-statement")) {
+          // 折り畳みを解除してからボタンのクリックイベントをページ側に渡す
+          // ただし、ここでは折り畳みクラスだけ一時的に外す
+          // （実際のクリックイベントはバブリングフェーズでページ側に届く）
+          statement.classList.remove("gs-collapsed-statement");
+          // 少し遅延して再び折り畳む（サイドバーが表示されるのを待つ）
+          // ※ ユーザーがサイドバーを見ている間は折り畳まない方が自然なので、
+          //   ここでは折り畳みを解除したままにする
+          const leadElement = findLeadElement(statement);
+          if (leadElement) {
+            expandStatementGroup(
+              findStatementsForLead(leadElement),
+              leadElement
+            );
+            syncTocToggle(leadElement, true);
+          }
+        }
+
+        // 拡張側ではこのクリックを一切消費しない（ページ側に委ねる）
+      },
+      true // キャプチャフェーズ
+    );
+  }
+
+  /**
+   * 指定された statement が属するグループの lead element を探す
+   */
+  function findLeadElement(statement) {
+    if (!tocList) return null;
+    const items = tocList.querySelectorAll(".gs-toc-item");
+    for (const li of items) {
+      if (li._tocStatements && li._tocStatements.includes(statement)) {
+        return li._tocStatement;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * lead element に紐づく statements 配列を探す
+   */
+  function findStatementsForLead(leadElement) {
+    if (!tocList) return [leadElement];
+    const items = tocList.querySelectorAll(".gs-toc-item");
+    for (const li of items) {
+      if (li._tocStatement === leadElement && li._tocStatements) {
+        return li._tocStatements;
+      }
+    }
+    return [leadElement];
+  }
+
   // IntersectionObserver
   let tocIntersectionObserver = null;
 
@@ -600,7 +676,6 @@
     }
 
     const visibleStatements = new Set();
-
     tocIntersectionObserver = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -617,7 +692,6 @@
 
     const items = tocList.querySelectorAll(".gs-toc-item");
     items.forEach((li) => {
-      // グループ内の全 statement を observe する
       if (li._tocStatements) {
         li._tocStatements.forEach((stmt) => {
           tocIntersectionObserver.observe(stmt);
@@ -630,12 +704,10 @@
 
   function applyTocHighlight(visibleStatements) {
     if (!tocList) return;
-
     const items = tocList.querySelectorAll(".gs-toc-item");
     let firstActiveLi = null;
 
     items.forEach((li) => {
-      // グループ内のいずれかが見えていればアクティブ
       let isActive = false;
       if (li._tocStatements) {
         isActive = li._tocStatements.some((stmt) => visibleStatements.has(stmt));
@@ -675,7 +747,6 @@
   // ======================================================
   // 2b. ページ内検索
   // ======================================================
-
   let searchState = {
     query: "",
     regex: false,
@@ -736,7 +807,8 @@
     filterChecks.forEach((cb) => {
       cb.addEventListener("change", () => {
         if (cb.value === "user") searchState.filterUser = cb.checked;
-        if (cb.value === "assistant") searchState.filterAssistant = cb.checked;
+        if (cb.value === "assistant")
+          searchState.filterAssistant = cb.checked;
         executeSearch();
       });
     });
@@ -750,20 +822,16 @@
 
   function buildSearchRegex(query, opts) {
     if (!query) return null;
-
     let pattern;
     if (opts.regex) {
       pattern = query;
     } else {
       pattern = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
-
     if (opts.wholeWord) {
       pattern = `\\b${pattern}\\b`;
     }
-
     const flags = opts.caseSensitive ? "g" : "gi";
-
     try {
       return new RegExp(pattern, flags);
     } catch {
@@ -783,6 +851,7 @@
     const navBtns = tocPanel.querySelectorAll(".gs-search-nav-btn");
 
     input.classList.remove("invalid");
+
     if (!searchState.query) {
       countEl.textContent = "";
       resultsList.innerHTML = "";
@@ -820,7 +889,6 @@
       const targetElements = getSearchTargetElements(statement);
       if (targetElements.length === 0) continue;
 
-      // 各要素についてマッチを探す
       const segments = [];
       for (const targetEl of targetElements) {
         const fullText = targetEl.textContent;
@@ -912,7 +980,6 @@
 
         const textNode = tn.node;
         const text = textNode.textContent;
-
         const before = text.substring(0, nodeStart);
         const matched = text.substring(nodeStart, nodeEnd);
         const after = text.substring(nodeEnd);
@@ -922,7 +989,6 @@
         mark.textContent = matched;
 
         const parent = textNode.parentNode;
-
         if (after) {
           parent.insertBefore(
             document.createTextNode(after),
@@ -935,11 +1001,9 @@
         } else {
           parent.removeChild(textNode);
         }
-
         highlights.unshift(mark);
       }
     }
-
     return highlights;
   }
 
@@ -952,7 +1016,6 @@
       parent.replaceChild(textNode, mark);
       parent.normalize();
     });
-
     searchState.flatMatches = [];
     searchState.currentIndex = -1;
   }
@@ -970,6 +1033,7 @@
     }
 
     const CONTEXT_CHARS = 30;
+    const fragment = document.createDocumentFragment();
 
     searchState.flatMatches.forEach((fm, flatIdx) => {
       const li = document.createElement("li");
@@ -1015,8 +1079,10 @@
         setCurrentSearchIndex(li._flatIndex);
       });
 
-      resultsList.appendChild(li);
+      fragment.appendChild(li);
     });
+
+    resultsList.appendChild(fragment);
   }
 
   function setCurrentSearchIndex(index) {
@@ -1031,7 +1097,6 @@
     }
 
     searchState.currentIndex = index;
-
     const cur = searchState.flatMatches[index];
     if (cur.element) {
       cur.element.classList.add("current");
@@ -1074,7 +1139,6 @@
   function navigateSearch(dir) {
     const total = searchState.flatMatches.length;
     if (total === 0) return;
-
     let newIdx;
     if (dir === "next") {
       newIdx = searchState.currentIndex + 1;
@@ -1083,14 +1147,12 @@
       newIdx = searchState.currentIndex - 1;
       if (newIdx < 0) newIdx = total - 1;
     }
-
     setCurrentSearchIndex(newIdx);
   }
 
   // ======================================================
   // 3. チャット全文エクスポート
   // ======================================================
-
   function createExportButton() {
     const headerRight = document.querySelector(SELECTORS.headerRightTop);
     if (!headerRight || headerRight.querySelector(".gs-export-btn")) return;
@@ -1099,7 +1161,7 @@
     btn.className = "icon gs-export-btn";
     btn.title = "チャットをMarkdownでエクスポート";
     btn.innerHTML = `
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
         <polyline points="7 10 12 15 17 10"/>
         <line x1="12" y1="15" x2="12" y2="3"/>
@@ -1133,16 +1195,43 @@
       if (isUser) {
         markdown += "**👤 ユーザー**\n\n";
         const codeEl = statement.querySelector(SELECTORS.userTextContent);
-        const text = codeEl ? codeEl.textContent.trim() : "";
-        markdown += text + "\n\n";
+        if (codeEl) {
+          markdown += codeEl.textContent.trim() + "\n\n";
+        } else {
+          const textContentEl = statement.querySelector(".text-content");
+          if (textContentEl) {
+            markdown += textContentEl.textContent.trim() + "\n\n";
+          }
+          const fileNames = statement.querySelectorAll(".file-name");
+          if (fileNames.length > 0) {
+            const names = Array.from(fileNames)
+              .map((el) => el.textContent.trim())
+              .filter(Boolean);
+            if (names.length > 0) {
+              markdown += `📎 添付ファイル: ${names.join(", ")}\n\n`;
+            }
+          }
+        }
       } else {
         markdown += "**🤖 AI**\n\n";
+
         const mdViewer = statement.querySelector(
           SELECTORS.assistantTextContent
         );
         if (mdViewer) {
           const text = extractMarkdownFromViewer(mdViewer);
           markdown += text + "\n\n";
+        }
+
+        // using-tool-call のツール名と引数のみ記録（サイドバー内容は除外）
+        const toolCalls = statement.querySelectorAll(SELECTORS.usingToolCall);
+        if (toolCalls.length > 0) {
+          toolCalls.forEach((toolCall) => {
+            const toolCallMd = extractToolCallMarkdown(toolCall);
+            if (toolCallMd) {
+              markdown += toolCallMd + "\n\n";
+            }
+          });
         }
       }
 
@@ -1162,54 +1251,180 @@
     URL.revokeObjectURL(url);
   }
 
+  /**
+   * using-tool-call 要素からツール名と引数のみを抽出する。
+   * サイドバーの内容（エージェントの内部思考）は含めない。
+   */
+  function extractToolCallMarkdown(toolCallEl) {
+    const nameEl = toolCallEl.querySelector(".name");
+    const toolName = nameEl ? nameEl.textContent.trim() : "ツール";
+
+    const argsEl = toolCallEl.querySelector(".arguments");
+    let argsText = "";
+    if (argsEl) {
+      const link = argsEl.querySelector("a");
+      if (link) {
+        argsText = link.getAttribute("href") || link.textContent.trim();
+      } else {
+        argsText = argsEl.textContent.trim();
+      }
+    }
+
+    const labelEl = toolCallEl.querySelector(".label");
+    const labelText = labelEl ? labelEl.textContent.trim() : "ツールを使用する";
+
+    let result = `> **🔧 ${labelText}**: ${toolName}`;
+    if (argsText) {
+      result += ` — ${argsText}`;
+    }
+
+    return result;
+  }
+
+  /**
+   * markdown-viewer DOM要素からMarkdownテキストを再構築する。
+   */
   function extractMarkdownFromViewer(viewer) {
     let result = "";
-    const innerDiv = viewer.querySelector("div");
-    const children = innerDiv ? innerDiv.children : viewer.children;
+
+    // viewer 直下の要素を収集（div ラッパーがある場合はその子を使う）
+    const children = getDirectContentChildren(viewer);
 
     if (!children || children.length === 0) return viewer.textContent.trim();
 
     for (const el of children) {
-      const tag = el.tagName.toLowerCase();
-
-      if (tag === "p") {
-        result += convertInlineMarkdown(el) + "\n\n";
-      } else if (/^h[1-6]$/.test(tag)) {
-        const originalLevel = parseInt(tag.charAt(1), 10);
-        const newLevel = Math.min(originalLevel + 2, 6);
-        const prefix = "#".repeat(newLevel);
-        result += `${prefix} ${el.textContent.trim()}\n\n`;
-      } else if (tag === "ul") {
-        for (const li of el.querySelectorAll(":scope > li")) {
-          result += `- ${li.textContent.trim()}\n`;
-        }
-        result += "\n";
-      } else if (tag === "ol") {
-        let i = 1;
-        for (const li of el.querySelectorAll(":scope > li")) {
-          result += `${i}. ${li.textContent.trim()}\n`;
-          i++;
-        }
-        result += "\n";
-      } else if (tag === "pre") {
-        const code = el.querySelector("code");
-        const lang = code?.className?.match(/language-(\w+)/)?.[1] || "";
-        result += `\`\`\`${lang}\n${code?.textContent || el.textContent}\n\`\`\`\n\n`;
-      } else if (tag === "hr") {
-        result += "---\n\n";
-      } else if (tag === "blockquote") {
-        const lines = el.textContent.trim().split("\n");
-        result += lines.map((l) => `> ${l}`).join("\n") + "\n\n";
-      } else if (tag === "table") {
-        result += convertTableToMarkdown(el) + "\n\n";
-      } else {
-        result += el.textContent.trim() + "\n\n";
-      }
+      result += convertElementToMarkdown(el);
     }
 
     return result.trim();
   }
 
+  /**
+   * viewer/container から直接のコンテンツ子要素を取得する。
+   * markdown-viewer の構造は以下のパターンがありうる:
+   *   - viewer > div > (p, table, pre, ...)
+   *   - viewer > (p, table, pre, ...)
+   *   - viewer > div > div > (p, table, pre, ...)
+   */
+  function getDirectContentChildren(container) {
+    // まずコンテナの直接の子要素を確認
+    const directChildren = Array.from(container.children);
+
+    if (directChildren.length === 0) return [];
+
+    // 直接の子がコンテンツ要素（p, table, pre, h1-h6, ul, ol, etc.）を含むか
+    const hasContentElements = directChildren.some((el) =>
+      isContentElement(el)
+    );
+
+    if (hasContentElements) {
+      return directChildren;
+    }
+
+    // 直接の子が div のみの場合、その中を探る
+    // ただし div が1つだけの場合はそのdivの子を返す
+    const divChildren = directChildren.filter(
+      (el) => el.tagName.toLowerCase() === "div"
+    );
+
+    if (divChildren.length === 1 && directChildren.length === 1) {
+      return getDirectContentChildren(divChildren[0]);
+    }
+
+    // 複数の div がある場合はそれらをそのまま返す
+    return directChildren;
+  }
+
+  /**
+   * 要素がコンテンツ要素（段落、テーブル、リスト等）かどうかを判定
+   */
+  function isContentElement(el) {
+    const tag = el.tagName.toLowerCase();
+    return /^(p|table|pre|h[1-6]|ul|ol|blockquote|hr|dl|figure|details)$/.test(
+      tag
+    );
+  }
+
+  /**
+   * 単一のDOM要素をMarkdown文字列に変換する
+   */
+  function convertElementToMarkdown(el) {
+    const tag = el.tagName.toLowerCase();
+
+    // using-tool-call / サイドバー関連はスキップ
+    if (
+      el.classList.contains("using-tool-call") ||
+      el.classList.contains("tool-call-result-sidebar-inner") ||
+      el.classList.contains("tool-call-result-sidebar")
+    ) {
+      return "";
+    }
+
+    if (tag === "p") {
+      return convertInlineMarkdown(el) + "\n\n";
+    }
+
+    if (/^h[1-6]$/.test(tag)) {
+      const originalLevel = parseInt(tag.charAt(1), 10);
+      const newLevel = Math.min(originalLevel + 2, 6);
+      const prefix = "#".repeat(newLevel);
+      return `${prefix} ${convertInlineMarkdown(el)}\n\n`;
+    }
+
+    if (tag === "ul") {
+      return convertListToMarkdown(el, "ul", 0) + "\n";
+    }
+
+    if (tag === "ol") {
+      return convertListToMarkdown(el, "ol", 0) + "\n";
+    }
+
+    if (tag === "pre") {
+      const code = el.querySelector("code");
+      const lang = code?.className?.match(/language-(\w+)/)?.[1] || "";
+      return `\`\`\`${lang}\n${code?.textContent || el.textContent}\n\`\`\`\n\n`;
+    }
+
+    if (tag === "hr") {
+      return "---\n\n";
+    }
+
+    if (tag === "blockquote") {
+      return convertBlockquoteToMarkdown(el) + "\n\n";
+    }
+
+    if (tag === "table") {
+      return convertTableToMarkdown(el) + "\n\n";
+    }
+
+    if (tag === "div") {
+      // div の中身を再帰的に処理
+      // ただし中身がテーブルや他のコンテンツ要素を含む可能性がある
+      let divResult = "";
+      for (const child of el.children) {
+        divResult += convertElementToMarkdown(child);
+      }
+      // 子要素から何も取得できなかった場合、テキストをフォールバック
+      if (!divResult.trim()) {
+        const text = el.textContent.trim();
+        if (text) {
+          return text + "\n\n";
+        }
+      }
+      return divResult;
+    }
+
+    // その他の要素
+    const text = el.textContent.trim();
+    if (text) {
+      return text + "\n\n";
+    }
+    return "";
+  }
+
+  /**
+   * インラインMarkdown変換（再帰対応版）
+   */
   function convertInlineMarkdown(el) {
     let result = "";
     for (const node of el.childNodes) {
@@ -1217,34 +1432,125 @@
         result += node.textContent;
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const tag = node.tagName.toLowerCase();
+        const innerContent = convertInlineMarkdown(node);
+
         if (tag === "code") {
           result += "`" + node.textContent + "`";
         } else if (tag === "strong" || tag === "b") {
-          result += "**" + node.textContent + "**";
+          result += "**" + innerContent + "**";
         } else if (tag === "em" || tag === "i") {
-          result += "*" + node.textContent + "*";
+          result += "*" + innerContent + "*";
         } else if (tag === "a") {
           const href = node.getAttribute("href") || "";
-          result += `[${node.textContent}](${href})`;
+          result += `[${innerContent}](${href})`;
+        } else if (tag === "del" || tag === "s") {
+          result += "~~" + innerContent + "~~";
+        } else if (tag === "br") {
+          result += "\n";
+        } else if (tag === "mark") {
+          result += innerContent;
         } else {
-          result += node.textContent;
+          result += innerContent;
         }
       }
     }
-    return result.trim();
+    return result;
   }
 
+  /**
+   * リスト要素を再帰的にMarkdownに変換（ネスト対応）
+   */
+  function convertListToMarkdown(listEl, listType, indentLevel) {
+    let result = "";
+    const indent = "  ".repeat(indentLevel);
+    let counter = 1;
+
+    for (const li of listEl.querySelectorAll(":scope > li")) {
+      const prefix = listType === "ol" ? `${counter}. ` : "- ";
+
+      let textContent = "";
+      for (const child of li.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          textContent += child.textContent;
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          const childTag = child.tagName.toLowerCase();
+          if (childTag === "ul" || childTag === "ol") {
+            continue;
+          }
+          textContent += convertInlineMarkdown(child);
+        }
+      }
+
+      result += `${indent}${prefix}${textContent.trim()}\n`;
+
+      const subUl = li.querySelector(":scope > ul");
+      const subOl = li.querySelector(":scope > ol");
+      if (subUl) {
+        result += convertListToMarkdown(subUl, "ul", indentLevel + 1);
+      }
+      if (subOl) {
+        result += convertListToMarkdown(subOl, "ol", indentLevel + 1);
+      }
+
+      counter++;
+    }
+
+    return result;
+  }
+
+  /**
+   * blockquote をMarkdownに変換
+   */
+  function convertBlockquoteToMarkdown(bqEl) {
+    let innerMd = "";
+    for (const child of bqEl.children) {
+      innerMd += convertElementToMarkdown(child);
+    }
+    if (!innerMd.trim()) {
+      innerMd = bqEl.textContent.trim();
+    }
+    const lines = innerMd.trim().split("\n");
+    return lines.map((l) => `> ${l}`).join("\n");
+  }
+
+  /**
+   * テーブル要素をMarkdownに変換。
+   * thead/tbody の有無にかかわらず動作する。
+   */
   function convertTableToMarkdown(table) {
-    const rows = table.querySelectorAll("tr");
-    if (rows.length === 0) return "";
+    // 全ての tr を取得（thead, tbody, tfoot 内を含む）
+    const allRows = Array.from(table.querySelectorAll("tr"));
+    if (allRows.length === 0) return "";
 
     const lines = [];
-    rows.forEach((row, rowIndex) => {
-      const cells = row.querySelectorAll("th, td");
-      const cellTexts = Array.from(cells).map((c) => c.textContent.trim());
+
+    allRows.forEach((row, rowIndex) => {
+      const cells = Array.from(row.querySelectorAll("th, td"));
+      const cellTexts = cells.map((c) => {
+        // セル内のインライン要素も変換
+        const text = convertInlineMarkdown(c);
+        // パイプと改行をエスケープ
+        return text.replace(/\|/g, "\\|").replace(/\n/g, " ").trim();
+      });
       lines.push("| " + cellTexts.join(" | ") + " |");
+
+      // 最初の行の後にセパレータを挿入
+      // ただし、th 要素を含む行の後にセパレータを入れる（ヘッダー行の判定）
       if (rowIndex === 0) {
-        lines.push("| " + cellTexts.map(() => "---").join(" | ") + " |");
+        const separators = cells.map((c) => {
+          const style = c.getAttribute("style") || "";
+          const align = c.getAttribute("align") || "";
+          if (style.includes("text-align: center") || align === "center") {
+            return ":---:";
+          } else if (
+            style.includes("text-align: right") ||
+            align === "right"
+          ) {
+            return "---:";
+          }
+          return "---";
+        });
+        lines.push("| " + separators.join(" | ") + " |");
       }
     });
 
@@ -1261,18 +1567,18 @@
   }
 
   // ======================================================
-  // フェーズ管理
+  // フェーズ管理（パフォーマンス改善版）
   // ======================================================
-
   let phase1Timer = null;
   let structureObserver = null;
   let structureDebounce = null;
   let textPollTimer = null;
+  let lastTocChangeTime = 0;
+  let isStreaming = false;
 
   function startPhase1() {
     stopPhase2();
     if (phase1Timer) return;
-
     phase1Timer = setInterval(() => {
       const el = document.querySelector(SELECTORS.conversationContent);
       if (el) {
@@ -1293,6 +1599,8 @@
     updateToc(false);
 
     structureObserver = new MutationObserver(() => {
+      isStreaming = true;
+      lastTocChangeTime = Date.now();
       if (structureDebounce) clearTimeout(structureDebounce);
       structureDebounce = setTimeout(() => {
         structureDebounce = null;
@@ -1305,9 +1613,35 @@
       subtree: false,
     });
 
-    textPollTimer = setInterval(() => {
+    // テキストポーリング（動的間隔）
+    scheduleTextPoll();
+  }
+
+  function scheduleTextPoll() {
+    if (textPollTimer) {
+      clearTimeout(textPollTimer);
+      textPollTimer = null;
+    }
+
+    const timeSinceLastChange = Date.now() - lastTocChangeTime;
+    // 最近変更があった場合（ストリーミング中）は短い間隔、安定後は長い間隔
+    const interval =
+      timeSinceLastChange < 10000
+        ? TIMING.textPollMs
+        : TIMING.textPollIdleMs;
+
+    textPollTimer = setTimeout(() => {
+      const prevKey = prevTextKey;
       updateToc(false);
-    }, TIMING.textPollMs);
+      // テキストが変わった場合はストリーミング中と判断
+      if (prevTextKey !== prevKey) {
+        isStreaming = true;
+        lastTocChangeTime = Date.now();
+      } else if (isStreaming && Date.now() - lastTocChangeTime > 10000) {
+        isStreaming = false;
+      }
+      scheduleTextPoll();
+    }, interval);
   }
 
   function stopPhase2() {
@@ -1320,7 +1654,7 @@
       structureDebounce = null;
     }
     if (textPollTimer) {
-      clearInterval(textPollTimer);
+      clearTimeout(textPollTimer);
       textPollTimer = null;
     }
   }
@@ -1342,13 +1676,11 @@
   // ======================================================
   // 初回 UI 配置
   // ======================================================
-
   let uiSetupDone = false;
   let uiSetupTimer = null;
 
   function trySetupUi() {
     createExportButton();
-
     if (document.querySelector(SELECTORS.headerRightTop)) {
       uiSetupDone = true;
       if (uiSetupTimer) {
@@ -1374,7 +1706,6 @@
   // ======================================================
   // キーボードショートカット
   // ======================================================
-
   function setupKeyboardShortcuts() {
     document.addEventListener("keydown", (e) => {
       // Alt+T: 目次折り畳み
@@ -1401,13 +1732,10 @@
       ) {
         e.preventDefault();
         e.stopPropagation();
-
         if (!tocPanel) return;
-
         if (tocCollapsed) {
           setTocCollapsed(false);
         }
-
         if (panelMode !== "search") {
           setPanelMode("search");
         } else {
@@ -1426,7 +1754,6 @@
   // ======================================================
   // SPA対応
   // ======================================================
-
   function setupSpaNavigationWatch() {
     let lastUrl = location.href;
 
@@ -1454,18 +1781,16 @@
 
   function onNavigate() {
     stopWatching();
-    stopFileInputObserver();
-
     prevStructureKey = "";
     prevTextKey = "";
     tocScrollLocked = false;
-    knownBroadestAccept = null;
+    isStreaming = false;
+    lastTocChangeTime = 0;
 
     if (tocIntersectionObserver) {
       tocIntersectionObserver.disconnect();
       tocIntersectionObserver = null;
     }
-
     if (tocList) {
       tocList.innerHTML = "";
     }
@@ -1483,6 +1808,7 @@
     searchState.results = [];
     searchState.flatMatches = [];
     searchState.currentIndex = -1;
+
     if (tocPanel) {
       const input = tocPanel.querySelector(".gs-search-input");
       if (input) input.value = "";
@@ -1507,11 +1833,12 @@
   // ======================================================
   // 初期化
   // ======================================================
-
   async function init() {
     await loadOptions();
     applyChatWidth();
+    injectPerformanceStyles();
     createTocPanel();
+    setupToolCallButtonProtection();
     startWatching();
     startUiSetupPolling();
     setupKeyboardShortcuts();
