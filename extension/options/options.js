@@ -6,6 +6,7 @@
     chatWidthPixel: 1200,
     tocEnabled: true,
     tocCollapsed: false,
+    searchEnabled: true,
   };
 
   const chatWidthEnabled = document.getElementById("chatWidthEnabled");
@@ -18,7 +19,8 @@
   const saveBtn = document.getElementById("saveBtn");
   const saveStatus = document.getElementById("saveStatus");
 
-  // 横幅拡張の有効/無効で fieldset を切り替え
+  const searchEnabled = document.getElementById("searchEnabled");
+
   chatWidthEnabled.addEventListener("change", () => {
     chatWidthFieldset.disabled = !chatWidthEnabled.checked;
   });
@@ -42,6 +44,7 @@
   // 読み込み
   browser.storage.local.get("options").then((stored) => {
     const opts = { ...DEFAULT_OPTIONS, ...(stored.options || {}) };
+
     chatWidthEnabled.checked = opts.chatWidthEnabled;
     chatWidthFieldset.disabled = !opts.chatWidthEnabled;
     chatWidthSlider.value = opts.chatWidthPercent;
@@ -52,6 +55,8 @@
       `input[name="chatWidthUnit"][value="${opts.chatWidthUnit}"]`
     ).checked = true;
     updateUnitUI();
+
+    searchEnabled.checked = opts.searchEnabled;
   });
 
   // 保存
@@ -65,6 +70,7 @@
       chatWidthUnit: unit,
       chatWidthPixel: parseInt(chatWidthPixel.value, 10),
       tocEnabled: tocEnabled.checked,
+      searchEnabled: searchEnabled.checked,
     };
 
     browser.storage.local.set({ options }).then(() => {

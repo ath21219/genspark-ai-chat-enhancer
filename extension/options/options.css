@@ -89,14 +89,46 @@ input[type="number"] {
   color: #333;
 }
 
-kbd {
-  padding: 2px 8px;
-  background: #f3f4f6;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
-  font-size: 12px;
+/* ショートカットキー表示（h2内ラベル） */
+h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.shortcut-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #9ca3af;
+  user-select: none;
+  margin-left: auto;
+}
+
+.shortcut-label kbd {
+  display: inline-block;
+  padding: 0 4px;
   font-family: monospace;
-  color: #374151;
+  font-size: 10px;
+  color: #9ca3af;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #d1d5db;
+  border-radius: 0;
+  line-height: 1.6;
+}
+
+@media (prefers-color-scheme: dark) {
+  .shortcut-label {
+    color: #6b7280;
+  }
+
+  .shortcut-label kbd {
+    color: #6b7280;
+    border-bottom-color: #555;
+  }
 }
 
 .save-row {
