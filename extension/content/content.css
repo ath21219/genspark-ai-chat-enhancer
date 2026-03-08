@@ -311,6 +311,7 @@
   gap: 4px;
   padding: 6px 8px;
   border-bottom: 1px solid #e5e7eb;
+  flex-wrap: nowrap;
 }
 
 .dark #gs-enhancer-toc .gs-search-input-row {
@@ -353,6 +354,14 @@
 .dark #gs-enhancer-toc .gs-search-input.invalid {
   border-color: #f87171;
   background: #451a1a;
+}
+
+/* --- オプションボタン群ラッパー（実DOM: .gs-search-options） --- */
+#gs-enhancer-toc .gs-search-options {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
 }
 
 /* --- 検索オプショントグルボタン共通 --- */
@@ -404,8 +413,21 @@
   color: #93c5fd;
 }
 
-/* --- フィルタ・ステータス行 --- */
-#gs-enhancer-toc .gs-search-toolbar {
+/* ボタン並び順: 大小区別 → 単語一致 → 正規表現 */
+#gs-enhancer-toc .gs-search-opt-btn[data-opt="case"] {
+  order: 1;
+}
+
+#gs-enhancer-toc .gs-search-opt-btn[data-opt="word"] {
+  order: 2;
+}
+
+#gs-enhancer-toc .gs-search-opt-btn[data-opt="regex"] {
+  order: 3;
+}
+
+/* --- フィルタ・ステータス行（実DOM: .gs-search-filters） --- */
+#gs-enhancer-toc .gs-search-filters {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -413,43 +435,41 @@
   border-bottom: 1px solid #e5e7eb;
   font-size: 11px;
   color: #6b7280;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
-.dark #gs-enhancer-toc .gs-search-toolbar {
+.dark #gs-enhancer-toc .gs-search-filters {
   border-bottom-color: #404040;
   color: #a0a0a0;
 }
 
-#gs-enhancer-toc .gs-search-toolbar label {
+#gs-enhancer-toc .gs-search-filters label {
   display: flex;
   align-items: center;
   gap: 3px;
   cursor: pointer;
   user-select: none;
   font-size: 11px;
+  flex-shrink: 0;
 }
 
-#gs-enhancer-toc .gs-search-toolbar input[type="checkbox"] {
+#gs-enhancer-toc .gs-search-filters input[type="checkbox"] {
   margin: 0;
   width: 13px;
   height: 13px;
 }
 
+/* 件数表示: margin-left:auto で右寄せグループの起点にする */
 #gs-enhancer-toc .gs-search-count {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-/* --- ナビゲーションボタン --- */
-#gs-enhancer-toc .gs-search-nav {
-  display: flex;
-  align-items: center;
-  gap: 2px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 
+/* --- ナビゲーションボタン（.gs-search-filters 直下） --- */
 #gs-enhancer-toc .gs-search-nav-btn {
+  flex-shrink: 0;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -857,8 +877,8 @@
     color: #93c5fd;
   }
 
-  /* --- 検索ツールバー --- */
-  #gs-enhancer-toc .gs-search-toolbar {
+  /* --- フィルタ行 --- */
+  #gs-enhancer-toc .gs-search-filters {
     border-bottom-color: #404040;
     color: #a0a0a0;
   }
@@ -917,49 +937,50 @@
   #gs-enhancer-toc .gs-search-empty {
     color: #6b7280;
   }
+}
 
-  /* --- 折り畳みトグル --- */
-  #gs-enhancer-toc .gs-toc-collapse-toggle {
-    border-color: #555;
-    background: #333;
-  }
+/* --- 折り畳みトグル --- */
+#gs-enhancer-toc .gs-toc-collapse-toggle {
+  border-color: #555;
+  background: #333;
+}
 
-  #gs-enhancer-toc .gs-toc-collapse-toggle:hover {
-    border-color: #888;
-    background: #3a3a3a;
-  }
+#gs-enhancer-toc .gs-toc-collapse-toggle:hover {
+  border-color: #888;
+  background: #3a3a3a;
+}
 
-  #gs-enhancer-toc .gs-toc-collapse-toggle.expanded::before {
-    border-top-color: #a0a0a0;
-  }
+#gs-enhancer-toc .gs-toc-collapse-toggle.expanded::before {
+  border-top-color: #a0a0a0;
+}
 
-  #gs-enhancer-toc .gs-toc-collapse-toggle:not(.expanded)::before {
-    border-top-color: #a0a0a0;
-  }
+#gs-enhancer-toc .gs-toc-collapse-toggle:not(.expanded)::before {
+  border-top-color: #a0a0a0;
+}
 
-  #gs-enhancer-toc .gs-toc-collapse-toggle:not(.expanded)::after {
-    border-left-color: #a0a0a0;
-  }
+#gs-enhancer-toc .gs-toc-collapse-toggle:not(.expanded)::after {
+  border-left-color: #a0a0a0;
+}
 
-  /* --- ページ上の折り畳みプレビュー --- */
-  .gs-collapsed-preview {
-    color: #9ca3af;
-  }
+/* --- ページ上の折り畳みプレビュー --- */
+.gs-collapsed-preview {
+  color: #9ca3af;
+}
 
-  .gs-collapsed-preview:hover {
-    background: #363636;
-  }
+.gs-collapsed-preview:hover {
+  background: #363636;
+}
 
-  .gs-collapsed-preview-icon {
-    color: #6b7280;
-  }
+.gs-collapsed-preview-icon {
+  color: #6b7280;
+}
 
-  .gs-collapsed-preview-badge {
-    color: #6b7280;
-  }
+.gs-collapsed-preview-badge {
+  color: #6b7280;
+}
 
-  /* --- エクスポートボタン --- */
-  .gs-export-btn:hover {
-    background: #404040;
-  }
+/* --- エクスポートボタン --- */
+.gs-export-btn:hover {
+  background: #404040;
+}
 }

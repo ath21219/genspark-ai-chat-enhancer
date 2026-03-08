@@ -177,7 +177,7 @@
           <div class="gs-search-options">
             <button class="gs-search-opt-btn" data-opt="regex" title="正規表現">.*</button>
             <button class="gs-search-opt-btn" data-opt="case" title="大小区別">Aa</button>
-            <button class="gs-search-opt-btn" data-opt="word" title="単語一致">\\b</button>
+            <button class="gs-search-opt-btn" data-opt="word" title="単語一致">ab</button>
           </div>
         </div>
         <div class="gs-search-filters">
