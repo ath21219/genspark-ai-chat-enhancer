@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Genspark AI Chat Enhancer",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Improve Genspark AI chat experience",
   "browser_specific_settings": {
     "gecko": {

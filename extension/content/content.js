@@ -102,29 +102,20 @@
   function injectPerformanceStyles() {
     const styleId = "gs-enhancer-perf-styles";
     if (document.getElementById(styleId)) return;
+
     const style = document.createElement("style");
     style.id = styleId;
     style.textContent = `
-      /* 画面外の会話ステートメントのレンダリングコストを削減 */
-      .conversation-statement {
-        content-visibility: auto;
-        contain-intrinsic-size: auto 300px;
-      }
-
-      /* 折り畳み時はレンダリングを完全にスキップ */
+      /* 折り畳み時は内容を非表示にする（contain は使わない） */
       .conversation-statement.gs-collapsed-statement > .desc {
         display: none !important;
       }
-      .conversation-statement.gs-collapsed-statement {
-        contain: strict;
-        content-visibility: hidden;
-        contain-intrinsic-size: auto 48px;
-      }
+
       /* 折り畳みプレビューは常に表示 */
       .conversation-statement.gs-collapsed-statement > .gs-collapsed-preview {
         display: flex !important;
-        content-visibility: visible;
       }
+
       /* using-tool-call のボタンが折り畳み時にも機能するように */
       .conversation-statement.gs-collapsed-statement .using-tool-call .view-tool-call-result-button {
         pointer-events: auto;
