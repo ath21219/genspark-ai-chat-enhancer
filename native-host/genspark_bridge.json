@@ -1,0 +1,9 @@
+{
+  "name": "genspark_bridge",
+  "description": "Genspark AI Chat Bridge - Native Host",
+  "path": "E:\\Work\\genspark-ai-chat-enhancer\\native-host\\genspark_bridge.bat",
+  "type": "stdio",
+  "allowed_extensions": [
+    "genspark-ai-chat-enhancer@example.org"
+  ]
+}
