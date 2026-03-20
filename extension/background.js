@@ -9,8 +9,12 @@ browser.action.onClicked.addListener(async () => {
     url: "https://www.genspark.ai/agents*",
   });
 
+  // bridge タブを除外してユーザーのタブを探す
   const existingTab = tabs.find(
-    (tab) => tab.url && tab.url.includes("type=ai_chat")
+    (tab) =>
+      tab.url &&
+      tab.url.includes("type=ai_chat") &&
+      !bridgeTabs.has(tab.id)
   );
 
   if (existingTab) {
@@ -87,16 +91,17 @@ function handleNativeMessage(message) {
 
   switch (message.type) {
     case "send_prompt":
-      requestManager.enqueue({
-        action: "inject_and_send",
-        text: message.text,
-        requestId: message.request_id,
-        conversationId: message.conversation_id || null,
-      });
+      forwardPrompt(message);
       break;
 
     case "ping":
       sendToNativeHost({ type: "pong" });
+      break;
+
+    case "reset":
+      // native-host 再起動時: 全 bridge タブをクリーンアップ
+      console.log("[GS Bridge] Reset received, cleaning up bridge tabs");
+      cleanupAllBridgeTabs();
       break;
 
     default:
@@ -109,15 +114,13 @@ function handleNativeMessage(message) {
 //
 // background.js が native-host リクエストのために
 // *自ら作成した* タブだけを管理する。
-// ユーザーが手動で開いたタブは一切登録しない。
 // ======================================================
 
 /**
  * @typedef {Object} BridgeTab
- * @property {number}        tabId
- * @property {"loading"|"ready"|"idle"|"busy"} status
- * @property {string|null}   activeRequestId
- * @property {string|null}   conversationId  — このタブが担当する会話
+ * @property {number}            tabId
+ * @property {"loading"|"idle"|"busy"} status
+ * @property {string|null}       activeRequestId
  */
 
 /** @type {Map<number, BridgeTab>} */
@@ -125,47 +128,40 @@ const bridgeTabs = new Map();
 
 /**
  * bridge 用の新規タブを作成し、レジストリに登録する。
- * @param {string|null} conversationId — 紐付ける会話ID
  * @returns {Promise<number>} tabId
  */
-async function createBridgeTab(conversationId) {
+async function createBridgeTab() {
   const tab = await browser.tabs.create({
     url: GENSPARK_CHAT_URL,
-    active: false, // バックグラウンドで開く
+    active: false,
   });
 
   bridgeTabs.set(tab.id, {
     tabId: tab.id,
     status: "loading",
     activeRequestId: null,
-    conversationId: conversationId,
   });
 
-  console.log(
-    "[GS Bridge] Created bridge tab:", tab.id,
-    "conversation:", conversationId
-  );
-
+  console.log("[GS Bridge] Created bridge tab:", tab.id);
   return tab.id;
 }
 
 /**
- * 指定 conversationId に紐付いた idle な bridge タブを探す。
- * conversationId が null なら、conversationId が null の idle タブを探す。
+ * 全 bridge タブを閉じてレジストリをクリアする。
  */
-function findBridgeTabForConversation(conversationId) {
+function cleanupAllBridgeTabs() {
   for (const [tabId, entry] of bridgeTabs) {
-    if (entry.conversationId === conversationId && entry.status === "idle") {
-      return tabId;
+    // busy だったリクエストにはエラーを返さない
+    // （native-host 側も再起動しているため受け取る先がない）
+    try {
+      browser.tabs.remove(tabId);
+    } catch {
+      // 既に閉じている場合
     }
   }
-  return null;
+  bridgeTabs.clear();
+  console.log("[GS Bridge] All bridge tabs cleaned up");
 }
-
-/**
- * conversationId に関係なく idle なタブを探す（新規会話用のフォールバック）。
- * → 使わない。新規会話は常に新規タブを作成する。
- */
 
 // タブが閉じられたらレジストリから除去
 browser.tabs.onRemoved.addListener((tabId) => {
@@ -174,28 +170,33 @@ browser.tabs.onRemoved.addListener((tabId) => {
   const entry = bridgeTabs.get(tabId);
   bridgeTabs.delete(tabId);
   console.log(
-    "[GS Bridge] Bridge tab closed:", tabId,
-    "remaining:", bridgeTabs.size
+    "[GS Bridge] Bridge tab closed:",
+    tabId,
+    "remaining:",
+    bridgeTabs.size
   );
 
-  // busy だったタブが閉じられた場合
   if (entry.status === "busy" && entry.activeRequestId) {
     sendToNativeHost({
       type: "error",
       request_id: entry.activeRequestId,
+      tab_id: tabId,
       error: "Bridge tab was closed while processing request.",
     });
   }
-
-  requestManager.dispatchNext();
 });
 
 // ======================================================
 // タブロード完了の検知
-//
-// bridge タブが loading → ready にするために、
-// tabs.onUpdated で status=complete を監視する。
 // ======================================================
+
+/**
+ * タブロード待ちキュー。
+ * タブ作成後、content script が ready になったら
+ * ここに溜まったメッセージを送信する。
+ * @type {Map<number, Object>}  tabId → message
+ */
+const pendingTabMessages = new Map();
 
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (!bridgeTabs.has(tabId)) return;
@@ -203,225 +204,191 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "complete") {
     const entry = bridgeTabs.get(tabId);
     if (entry.status === "loading") {
-      // ページロード完了。content script の準備を確認する。
       waitForContentScriptReady(tabId);
     }
   }
 });
 
 /**
- * content script が応答可能になるまでリトライ ping する。
+ * content script が応答可能 かつ SPA が初期化完了するまでリトライ。
  */
-async function waitForContentScriptReady(tabId, retries = 15) {
+async function waitForContentScriptReady(tabId, retries = 30) {
   for (let i = 0; i < retries; i++) {
     try {
       const response = await browser.tabs.sendMessage(tabId, {
         action: "ping",
       });
       if (response && response.status === "alive") {
-        const entry = bridgeTabs.get(tabId);
-        if (entry) {
-          entry.status = "idle";
-          console.log("[GS Bridge] Bridge tab ready:", tabId);
-          requestManager.dispatchNext();
+        if (response.spaReady) {
+          // content script 応答可能 & SPA 初期化済み
+          const entry = bridgeTabs.get(tabId);
+          if (entry) {
+            entry.status = "idle";
+            console.log("[GS Bridge] Bridge tab ready (SPA ready):", tabId);
+
+            if (pendingTabMessages.has(tabId)) {
+              const message = pendingTabMessages.get(tabId);
+              pendingTabMessages.delete(tabId);
+              await sendToTab(tabId, message);
+            }
+          }
+          return;
         }
-        return;
+        // content script は応答するが SPA 未初期化 → 待つ
+        console.log(
+          "[GS Bridge] Content script alive but SPA not ready, waiting...",
+          tabId
+        );
       }
     } catch {
-      // content script 未準備 → 待つ
+      // content script 未準備
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
 
-  // タイムアウト
-  console.error("[GS Bridge] Content script not ready after retries:", tabId);
+  // タイムアウト — SPA が初期化されなくても、
+  // bridge.js 側の waitForSpaReady が独自にリトライするため、
+  // ここではメッセージを送信して bridge.js 側に委ねる。
+  console.warn(
+    "[GS Bridge] SPA not confirmed ready after retries, " +
+    "proceeding anyway:",
+    tabId
+  );
   const entry = bridgeTabs.get(tabId);
   if (entry) {
-    // タブは残すが loading のまま。
-    // このタブに紐付いたキューのリクエストがあればエラーを返す。
-    // dispatchNext が再度新しいタブを作成する可能性がある。
-    entry.status = "idle"; // 一応 idle にして再試行を許可
-    requestManager.dispatchNext();
+    entry.status = "idle";
+
+    if (pendingTabMessages.has(tabId)) {
+      const message = pendingTabMessages.get(tabId);
+      pendingTabMessages.delete(tabId);
+      await sendToTab(tabId, message);
+    }
   }
 }
 
 // ======================================================
-// リクエストマネージャ
+// プロンプト転送
 //
-// native-host からのリクエストをキューに入れ、
-// 適切な bridge タブにディスパッチする。
+// native-host から受信した send_prompt を適切なタブに送る。
 //
-// ルール:
-//   - conversationId が指定されている場合:
-//     → そのIDに紐付いた idle なタブを使う
-//     → 無ければキューで待機（タブが busy を終えるのを待つ）
-//     → 紐付いたタブ自体が無い場合はエラー（会話が失われた）
-//   - conversationId が null（新規会話）の場合:
-//     → 新規タブを作成
+//   tab_id あり → そのタブに送信（存在しなければエラー）
+//   tab_id なし → 新規タブを作成して送信
 // ======================================================
 
-const requestManager = {
-  /** @type {Array<Object>} */
-  queue: [],
+async function forwardPrompt(nativeMessage) {
+  const requestId = nativeMessage.request_id;
+  const text = nativeMessage.text;
+  const tabId = nativeMessage.tab_id; // number or undefined
 
-  enqueue(message) {
-    console.log(
-      "[GS Bridge] Enqueue:", message.requestId,
-      "conversation:", message.conversationId
-    );
-    this.queue.push(message);
-    this.dispatchNext();
-  },
+  const message = {
+    action: "inject_and_send",
+    text: text,
+    requestId: requestId,
+  };
 
-  async dispatchNext() {
-    if (this.queue.length === 0) return;
+  if (tabId != null) {
+    // --- 会話継続: 指定タブに送信 ---
+    const entry = bridgeTabs.get(tabId);
 
-    // キューの先頭を確認（まだ取り出さない）
-    const message = this.queue[0];
-    const convId = message.conversationId;
-
-    if (convId) {
-      // --- 会話継続リクエスト ---
-      const tabId = findBridgeTabForConversation(convId);
-
-      if (tabId !== null) {
-        // idle なタブあり → ディスパッチ
-        this.queue.shift();
-        await this._sendToTab(tabId, message);
-        return;
-      }
-
-      // そのconversationIdのタブが存在するか確認
-      let tabExists = false;
-      for (const [, entry] of bridgeTabs) {
-        if (entry.conversationId === convId) {
-          tabExists = true;
-          break;
-        }
-      }
-
-      if (tabExists) {
-        // タブはあるが busy → 待機
-        console.log(
-          "[GS Bridge] Conversation tab busy, waiting:",
-          convId
-        );
-        return;
-      }
-
-      // タブが無い（閉じられた等）→ エラー
-      this.queue.shift();
+    if (!entry) {
       console.error(
-        "[GS Bridge] No tab for conversation:", convId
+        "[GS Bridge] tab_id",
+        tabId,
+        "not found in bridgeTabs"
       );
       sendToNativeHost({
         type: "error",
-        request_id: message.requestId,
-        error: `Bridge tab for conversation ${convId} no longer exists.`,
+        request_id: requestId,
+        tab_id: tabId,
+        error: `Bridge tab ${tabId} not found (tab may have been closed).`,
       });
-      // 次のキューを処理
-      this.dispatchNext();
       return;
     }
 
-    // --- 新規会話リクエスト (conversationId === null) ---
-    this.queue.shift();
+    if (entry.status === "busy") {
+      console.error(
+        "[GS Bridge] tab_id",
+        tabId,
+        "is busy with",
+        entry.activeRequestId
+      );
+      sendToNativeHost({
+        type: "error",
+        request_id: requestId,
+        tab_id: tabId,
+        error: `Bridge tab ${tabId} is busy with another request.`,
+      });
+      return;
+    }
 
+    if (entry.status === "loading") {
+      console.warn(
+        "[GS Bridge] tab_id",
+        tabId,
+        "still loading, queuing message"
+      );
+      pendingTabMessages.set(tabId, message);
+      return;
+    }
+
+    // idle → 送信
+    await sendToTab(tabId, message);
+  } else {
+    // --- 新規会話: タブを作成 ---
     try {
-      const newTabId = await createBridgeTab(null);
-      // conversationId は native-host からの stream_end 後に
-      // 次のリクエストで割り当てられる。
-      // タブは loading 状態。ready になったら _sendToTab する。
-      // → ロード待ちキューに入れる
-      this._waitingForTab.push({ tabId: newTabId, message });
+      const newTabId = await createBridgeTab();
+      pendingTabMessages.set(newTabId, message);
       console.log(
-        "[GS Bridge] Waiting for new tab to load:", newTabId
+        "[GS Bridge] New tab created:",
+        newTabId,
+        "request queued for load"
       );
     } catch (e) {
       console.error("[GS Bridge] Failed to create tab:", e);
       sendToNativeHost({
         type: "error",
-        request_id: message.requestId,
+        request_id: requestId,
         error: "Failed to create bridge tab: " + e.message,
       });
-      this.dispatchNext();
     }
-  },
+  }
+}
 
-  /** @type {Array<{tabId: number, message: Object}>} */
-  _waitingForTab: [],
+async function sendToTab(tabId, message) {
+  const entry = bridgeTabs.get(tabId);
+  if (!entry) {
+    sendToNativeHost({
+      type: "error",
+      request_id: message.requestId,
+      tab_id: tabId,
+      error: "Bridge tab no longer exists.",
+    });
+    return;
+  }
 
-  /**
-   * タブが ready になったとき、_waitingForTab にそのタブ向けの
-   * リクエストがあれば送信する。
-   * dispatchNext() から呼ばれる経路で間接的に処理される。
-   */
-  async checkWaitingForTab() {
-    const stillWaiting = [];
+  entry.status = "busy";
+  entry.activeRequestId = message.requestId;
 
-    for (const item of this._waitingForTab) {
-      const entry = bridgeTabs.get(item.tabId);
-      if (!entry) {
-        // タブが消えた
-        sendToNativeHost({
-          type: "error",
-          request_id: item.message.requestId,
-          error: "Bridge tab closed before becoming ready.",
-        });
-        continue;
-      }
-
-      if (entry.status === "idle") {
-        await this._sendToTab(item.tabId, item.message);
-      } else {
-        stillWaiting.push(item);
-      }
-    }
-
-    this._waitingForTab = stillWaiting;
-  },
-
-  async _sendToTab(tabId, message) {
-    const requestId = message.requestId;
-    const entry = bridgeTabs.get(tabId);
-    if (!entry) {
-      sendToNativeHost({
-        type: "error",
-        request_id: requestId,
-        error: "Bridge tab no longer exists.",
-      });
-      return;
-    }
-
-    entry.status = "busy";
-    entry.activeRequestId = requestId;
-
-    try {
-      await browser.tabs.sendMessage(tabId, message);
-      console.log(
-        "[GS Bridge] Dispatched to bridge tab:", tabId,
-        "request:", requestId
-      );
-    } catch (e) {
-      console.error("[GS Bridge] Send to tab failed:", tabId, e);
-      entry.status = "idle";
-      entry.activeRequestId = null;
-      sendToNativeHost({
-        type: "error",
-        request_id: requestId,
-        error: "Failed to send to content script: " + e.message,
-      });
-      this.dispatchNext();
-    }
-  },
-};
-
-// dispatchNext をオーバーライドして _waitingForTab も処理
-const _originalDispatchNext = requestManager.dispatchNext.bind(requestManager);
-requestManager.dispatchNext = async function () {
-  await this.checkWaitingForTab();
-  await _originalDispatchNext();
-};
+  try {
+    await browser.tabs.sendMessage(tabId, message);
+    console.log(
+      "[GS Bridge] Dispatched to tab:",
+      tabId,
+      "request:",
+      message.requestId
+    );
+  } catch (e) {
+    console.error("[GS Bridge] Send to tab failed:", tabId, e);
+    entry.status = "idle";
+    entry.activeRequestId = null;
+    sendToNativeHost({
+      type: "error",
+      request_id: message.requestId,
+      tab_id: tabId,
+      error: "Failed to send to content script: " + e.message,
+    });
+  }
+}
 
 // ======================================================
 // content script からのメッセージ受信
@@ -434,19 +401,21 @@ browser.runtime.onMessage.addListener((message, sender) => {
 
   // --- content script → nativeHost 中継 ---
   if (message.target === "native_bridge") {
-    // bridge タブからのメッセージのみ中継する
     if (tabId == null || !bridgeTabs.has(tabId)) {
       console.warn(
-        "[GS Bridge] Ignoring native_bridge message from non-bridge tab:",
+        "[GS Bridge] Ignoring native_bridge from non-bridge tab:",
         tabId
       );
       return;
     }
 
     const payload = message.payload;
+
+    // tab_id を付与して native-host に送信
+    payload.tab_id = tabId;
+
     sendToNativeHost(payload);
 
-    // stream_end / error でタブを idle に戻す
     if (
       payload.type === "stream_end" ||
       payload.type === "stream_error" ||
@@ -457,14 +426,33 @@ browser.runtime.onMessage.addListener((message, sender) => {
         entry.status = "idle";
         entry.activeRequestId = null;
       }
-      requestManager.dispatchNext();
     }
     return;
   }
 
-  // --- bridge_register は無視（自動登録を廃止） ---
+  // --- bridge_register は無視 ---
   if (message.target === "bridge_register") {
-    // 何もしない。bridge タブの管理は background.js が主導。
     return;
   }
 });
+
+// ======================================================
+// 起動時に native host へ接続
+//
+// connectNative() → Firefox が native_bridge.py を起動
+// → native_bridge.py が api_server.py に TCP 接続
+// ======================================================
+
+(function initNativeConnection() {
+  console.log("[GS Bridge] Initializing native host connection...");
+  try {
+    ensureNativePort();
+    // 接続確認
+    sendToNativeHost({ type: "ping" });
+    console.log("[GS Bridge] Native host connection initiated");
+  } catch (e) {
+    console.error("[GS Bridge] Failed to connect to native host:", e);
+    // 拡張機能ロード時にネイティブホストに接続できない場合、
+    // 後で sendToNativeHost が呼ばれた時に再試行される
+  }
+})();

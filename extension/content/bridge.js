@@ -1,8 +1,9 @@
 // bridge.js — Native Messaging Bridge (content script 側)
 //
-// ※ このスクリプトは全 Genspark タブに注入されるが、
-//    background.js が管理する bridge タブにのみメッセージが送られる。
-//    非 bridge タブではこのスクリプトは何もしない（ping 応答のみ）。
+// ストリーミング戦略:
+//   Genspark のストリーミングは途中でテキストが何度も置換されるため、
+//   .is_asking が消滅する（=完了）まで一切テキストを送信しない。
+//   完了後に最終テキストを一括で送信する。
 //
 (function () {
   "use strict";
@@ -11,26 +12,21 @@
 
   const LOG = "[GS Bridge]";
 
-  // ======================================================
-  // Genspark 固有セレクタ
-  // ======================================================
   const GS = {
     input: "textarea.j-search-input",
     sendButton: ".enter-icon .enter-icon-wrapper",
     loadingIndicator: ".is_asking",
   };
 
-  // ======================================================
-  // タイミング設定
-  // ======================================================
   const TIMING = {
     inputToSendMs: 200,
     sendToWatchMs: 800,
-    pollMs: 200,
+    pollMs: 300,
     responseTimeoutMs: 60000,
-    finishGraceMs: 500,
-    deltaThrottleMs: 100,
+    finishGraceMs: 800,
     safetyTimeoutMs: 300000,
+    spaReadyPollMs: 300,
+    spaReadyTimeoutMs: 30000,
   };
 
   // ======================================================
@@ -38,14 +34,12 @@
   // ======================================================
   let currentRequestId = null;
   let isStreaming = false;
-  let lastSentText = "";
   let assistantCountBeforeSend = 0;
+  let lastAssistantViewerBeforeSend = null;
 
-  let streamObserver = null;
   let loadingObserver = null;
   let pollTimer = null;
   let safetyTimer = null;
-  let deltaThrottleTimer = null;
 
   // ======================================================
   // background.js への送信
@@ -58,9 +52,31 @@
   }
 
   // ======================================================
+  // SPA 準備完了チェック
+  // ======================================================
+  function waitForSpaReady() {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const el = document.querySelector(GS.input);
+      if (el) { resolve(el); return; }
+      const timer = setInterval(() => {
+        const el = document.querySelector(GS.input);
+        if (el) { clearInterval(timer); resolve(el); return; }
+        if (Date.now() - start > TIMING.spaReadyTimeoutMs) {
+          clearInterval(timer);
+          reject(new Error(`SPA not ready: ${GS.input} not found`));
+        }
+      }, TIMING.spaReadyPollMs);
+    });
+  }
+
+  function isSpaReady() {
+    return document.querySelector(GS.input) !== null;
+  }
+
+  // ======================================================
   // DOM ヘルパー
   // ======================================================
-
   function getAllAssistantStatements() {
     const container = document.querySelector(SEL.conversationContent);
     if (!container) return [];
@@ -75,6 +91,15 @@
     return stmts[stmts.length - 1].querySelector(SEL.assistantTextContent);
   }
 
+  function getNewAssistantViewer() {
+    const stmts = getAllAssistantStatements();
+    if (stmts.length <= assistantCountBeforeSend) return null;
+    const newStmt = stmts[stmts.length - 1];
+    const viewer = newStmt.querySelector(SEL.assistantTextContent);
+    if (viewer && viewer === lastAssistantViewerBeforeSend) return null;
+    return viewer;
+  }
+
   function isPageLoading() {
     return document.querySelector(GS.loadingIndicator) !== null;
   }
@@ -82,62 +107,31 @@
   // ======================================================
   // テキスト入力 & 送信
   // ======================================================
-
-  function injectTextAndSend(text) {
-    const textarea = document.querySelector(GS.input);
-    if (!textarea) {
-      console.error(LOG, "Input textarea not found");
-      sendToBg({
-        type: "error",
-        request_id: currentRequestId,
-        error: "Chat input textarea not found.",
-      });
-      return false;
-    }
-
+  function injectTextAndSend(textarea, text) {
     const nativeSetter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      "value"
+      HTMLTextAreaElement.prototype, "value"
     )?.set;
-
     if (nativeSetter) {
       nativeSetter.call(textarea, text);
     } else {
       textarea.value = text;
     }
-
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
-
     textarea.style.height = "auto";
     textarea.style.height = textarea.scrollHeight + "px";
-
     console.log(LOG, "Text injected, length:", text.length);
-
-    setTimeout(() => {
-      clickSend(textarea);
-    }, TIMING.inputToSendMs);
-
+    setTimeout(() => clickSend(textarea), TIMING.inputToSendMs);
     return true;
   }
 
   function clickSend(textarea) {
     const sendEl = document.querySelector(GS.sendButton);
-    if (sendEl) {
-      console.log(LOG, "Clicking send element");
-      sendEl.click();
-      return;
-    }
-
-    console.log(LOG, "Send element not found, pressing Enter");
+    if (sendEl) { sendEl.click(); return; }
     textarea.focus();
     const opts = {
-      key: "Enter",
-      code: "Enter",
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true,
+      key: "Enter", code: "Enter", keyCode: 13, which: 13,
+      bubbles: true, cancelable: true,
     };
     textarea.dispatchEvent(new KeyboardEvent("keydown", opts));
     textarea.dispatchEvent(new KeyboardEvent("keypress", opts));
@@ -146,20 +140,24 @@
 
   // ======================================================
   // ストリーミング監視
+  //
+  // Phase 1: 新しいアシスタント発言の出現を待つ
+  // Phase 2: .is_asking の消滅を待つ
+  // Phase 3: 完了 → 最終テキストを一括送信
   // ======================================================
-
   function startStreamWatcher(requestId) {
     cleanup();
     currentRequestId = requestId;
-    lastSentText = "";
     isStreaming = true;
 
-    console.log(LOG, "Starting stream watcher:", requestId);
+    console.log(LOG, "Starting stream watcher:", requestId,
+      "assistant count before:", assistantCountBeforeSend);
 
+    // Phase 1: 新しいアシスタント発言を待つ
     const pollStart = Date.now();
     pollTimer = setInterval(() => {
       if (Date.now() - pollStart > TIMING.responseTimeoutMs) {
-        console.warn(LOG, "Timed out waiting for response");
+        console.warn(LOG, "Timed out waiting for new assistant statement");
         sendToBg({
           type: "stream_error",
           request_id: currentRequestId,
@@ -169,135 +167,80 @@
         return;
       }
 
-      const currentCount = getAllAssistantStatements().length;
-      const loading = isPageLoading();
-
-      if (currentCount > assistantCountBeforeSend || loading) {
+      // 新しい発言が見つかったら Phase 2 へ
+      const newViewer = getNewAssistantViewer();
+      if (newViewer) {
         clearInterval(pollTimer);
         pollTimer = null;
-
-        const viewerPollStart = Date.now();
-        const viewerPoll = setInterval(() => {
-          const viewer = getLatestAssistantViewer();
-          if (viewer) {
-            clearInterval(viewerPoll);
-            beginObserving(viewer);
-            return;
-          }
-          if (Date.now() - viewerPollStart > 5000) {
-            clearInterval(viewerPoll);
-            console.warn(LOG, "Viewer not found after response started");
-            beginObserving(null);
-          }
-        }, TIMING.pollMs);
+        console.log(LOG, "New assistant statement detected");
+        waitForLoadingEnd(newViewer);
       }
     }, TIMING.pollMs);
 
     safetyTimer = setTimeout(() => {
       if (isStreaming) {
         console.warn(LOG, "Safety timeout reached");
-        finishStream(getLatestAssistantViewer());
+        sendFinalText();
       }
     }, TIMING.safetyTimeoutMs);
   }
 
-  function beginObserving(viewer) {
-    console.log(LOG, "Begin observing, viewer:", !!viewer);
-
-    if (viewer) {
-      sendStreamDelta(viewer);
-
-      streamObserver = new MutationObserver(() => {
-        if (!deltaThrottleTimer) {
-          deltaThrottleTimer = setTimeout(() => {
-            deltaThrottleTimer = null;
-            sendStreamDelta(viewer);
-          }, TIMING.deltaThrottleMs);
-        }
-      });
-
-      streamObserver.observe(viewer, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
-    }
-
+  // Phase 2: .is_asking の消滅を待つ
+  function waitForLoadingEnd(viewer) {
     if (!isPageLoading()) {
-      console.log(LOG, ".is_asking not present, short-response path");
+      // 既に .is_asking が無い（超高速レスポンス）
+      console.log(LOG, ".is_asking already gone");
       setTimeout(() => {
-        if (isStreaming) {
-          finishStream(viewer || getLatestAssistantViewer());
-        }
-      }, 2000);
+        if (isStreaming) sendFinalText();
+      }, TIMING.finishGraceMs);
       return;
     }
+
+    console.log(LOG, "Waiting for .is_asking to disappear...");
 
     loadingObserver = new MutationObserver(() => {
       if (!isPageLoading()) {
         console.log(LOG, ".is_asking disappeared — stream complete");
+        loadingObserver.disconnect();
+        loadingObserver = null;
+
+        // 少し待ってからテキスト取得（DOM 最終レンダリング待ち）
         setTimeout(() => {
-          if (isStreaming) {
-            finishStream(viewer || getLatestAssistantViewer());
-          }
+          if (isStreaming) sendFinalText();
         }, TIMING.finishGraceMs);
       }
     });
 
     const observeTarget =
       document.querySelector(SEL.conversationContent) || document.body;
-
     loadingObserver.observe(observeTarget, {
       childList: true,
       subtree: true,
     });
   }
 
-  // ======================================================
-  // 差分送信
-  // ======================================================
-
-  function sendStreamDelta(viewer) {
-    if (!viewer) return;
-    const currentText = viewer.textContent || "";
-    if (currentText === lastSentText) return;
-
-    const delta = currentText.substring(lastSentText.length);
-    lastSentText = currentText;
-
-    if (delta) {
-      sendToBg({
-        type: "stream_delta",
-        request_id: currentRequestId,
-        delta: delta,
-        full_text: currentText,
-      });
-    }
-  }
-
-  // ======================================================
-  // 完了 & クリーンアップ
-  // ======================================================
-
-  function finishStream(viewer) {
+  // Phase 3: 最終テキストを取得して一括送信
+  function sendFinalText() {
     if (!isStreaming) return;
     isStreaming = false;
 
-    const finalViewer = viewer || getLatestAssistantViewer();
-    const finalText = finalViewer
-      ? finalViewer.textContent || ""
-      : lastSentText;
+    const viewer = getNewAssistantViewer() || getLatestAssistantViewer();
+    const finalText = viewer ? (viewer.textContent || "") : "";
 
-    if (finalText !== lastSentText) {
-      const remaining = finalText.substring(lastSentText.length);
-      if (remaining) {
-        sendToBg({
-          type: "stream_delta",
-          request_id: currentRequestId,
-          delta: remaining,
-          full_text: finalText,
-        });
-      }
+    console.log(
+      LOG, "Sending final text:", currentRequestId,
+      "length:", finalText.length,
+      "preview:", finalText.substring(0, 80)
+    );
+
+    if (finalText) {
+      sendToBg({
+        type: "stream_delta",
+        request_id: currentRequestId,
+        delta: finalText,
+        full_text: finalText,
+        replacement: false,
+      });
     }
 
     sendToBg({
@@ -306,62 +249,33 @@
       full_text: finalText,
     });
 
-    console.log(
-      LOG,
-      "Stream finished:",
-      currentRequestId,
-      "length:",
-      finalText.length
-    );
-
     cleanup();
   }
 
+  // ======================================================
+  // クリーンアップ
+  // ======================================================
   function cleanup() {
     isStreaming = false;
-    if (streamObserver) {
-      streamObserver.disconnect();
-      streamObserver = null;
-    }
-    if (loadingObserver) {
-      loadingObserver.disconnect();
-      loadingObserver = null;
-    }
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-    if (safetyTimer) {
-      clearTimeout(safetyTimer);
-      safetyTimer = null;
-    }
-    if (deltaThrottleTimer) {
-      clearTimeout(deltaThrottleTimer);
-      deltaThrottleTimer = null;
-    }
+    lastAssistantViewerBeforeSend = null;
+    if (loadingObserver) { loadingObserver.disconnect(); loadingObserver = null; }
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
   }
 
   // ======================================================
   // background.js からのメッセージ受信
-  //
-  // このリスナーは全 Genspark タブに存在するが、
-  // background.js は bridge タブにしかメッセージを送らないため、
-  // ユーザーの通常タブでは inject_and_send が呼ばれることはない。
   // ======================================================
-
   browser.runtime.onMessage.addListener((message, sender) => {
     if (!message || !message.action) return;
 
     switch (message.action) {
       case "inject_and_send": {
         console.log(
-          LOG,
-          "Received inject_and_send:",
+          LOG, "Received inject_and_send:",
           message.text?.substring(0, 80)
         );
-
         if (isStreaming) {
-          console.warn(LOG, "Already streaming, rejecting");
           sendToBg({
             type: "error",
             request_id: message.requestId,
@@ -369,47 +283,59 @@
           });
           return;
         }
-
         currentRequestId = message.requestId;
-        assistantCountBeforeSend = getAllAssistantStatements().length;
 
-        const success = injectTextAndSend(message.text);
-        if (success) {
-          sendToBg({
-            type: "prompt_sent",
-            request_id: message.requestId,
+        waitForSpaReady()
+          .then((textarea) => {
+            const stmts = getAllAssistantStatements();
+            assistantCountBeforeSend = stmts.length;
+            if (stmts.length > 0) {
+              lastAssistantViewerBeforeSend =
+                stmts[stmts.length - 1].querySelector(
+                  SEL.assistantTextContent
+                );
+            } else {
+              lastAssistantViewerBeforeSend = null;
+            }
+
+            console.log(
+              LOG, "Before send: assistantCount=",
+              assistantCountBeforeSend
+            );
+
+            const success = injectTextAndSend(textarea, message.text);
+            if (success) {
+              sendToBg({
+                type: "prompt_sent",
+                request_id: message.requestId,
+              });
+              setTimeout(() => {
+                startStreamWatcher(message.requestId);
+              }, TIMING.sendToWatchMs);
+            }
+          })
+          .catch((err) => {
+            console.error(LOG, "SPA ready timeout:", err.message);
+            sendToBg({
+              type: "error",
+              request_id: message.requestId,
+              error: err.message,
+            });
           });
-
-          setTimeout(() => {
-            startStreamWatcher(message.requestId);
-          }, TIMING.sendToWatchMs);
-        }
-        break;
+        return;
       }
-
       case "ping":
-        return Promise.resolve({ status: "alive" });
+        return Promise.resolve({
+          status: "alive",
+          spaReady: isSpaReady(),
+        });
     }
   });
 
-  // ======================================================
-  // ※ registerSelf() は削除。
-  //    bridge タブの管理は background.js が主導する。
-  //    全タブに注入されるが、background.js が
-  //    tabs.sendMessage で bridge タブにのみ送信するため、
-  //    ユーザーの通常タブでは bridge 処理は発生しない。
-  // ======================================================
-
-  // ======================================================
-  // 外部公開（デバッグ用）
-  // ======================================================
   ns.bridge = {
     cleanup,
-    get isStreaming() {
-      return isStreaming;
-    },
-    get currentRequestId() {
-      return currentRequestId;
-    },
+    get isStreaming() { return isStreaming; },
+    get currentRequestId() { return currentRequestId; },
+    get spaReady() { return isSpaReady(); },
   };
 })();
