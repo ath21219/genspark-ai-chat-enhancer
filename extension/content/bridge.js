@@ -1,10 +1,8 @@
 // bridge.js — Native Messaging Bridge (content script 側)
 //
-// Genspark DOM 構造 (2026-03 時点):
-//   入力欄:    textarea.j-search-input[name="query"]
-//   送信:      .enter-icon > .enter-icon-wrapper  (div)
-//   応答:      .conversation-statement.assistant > .desc .content .markdown-viewer
-//   読込中:    .is_asking  (ストリーミング中に出現、完了で消滅)
+// ※ このスクリプトは全 Genspark タブに注入されるが、
+//    background.js が管理する bridge タブにのみメッセージが送られる。
+//    非 bridge タブではこのスクリプトは何もしない（ping 応答のみ）。
 //
 (function () {
   "use strict";
@@ -43,7 +41,6 @@
   let lastSentText = "";
   let assistantCountBeforeSend = 0;
 
-  // クリーンアップ対象
   let streamObserver = null;
   let loadingObserver = null;
   let pollTimer = null;
@@ -98,9 +95,9 @@
       return false;
     }
 
-    // Vue v-model 対応: ネイティブ setter + イベント発火
     const nativeSetter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype, "value"
+      HTMLTextAreaElement.prototype,
+      "value"
     )?.set;
 
     if (nativeSetter) {
@@ -112,7 +109,6 @@
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // autosize 対応
     textarea.style.height = "auto";
     textarea.style.height = textarea.scrollHeight + "px";
 
@@ -136,8 +132,12 @@
     console.log(LOG, "Send element not found, pressing Enter");
     textarea.focus();
     const opts = {
-      key: "Enter", code: "Enter", keyCode: 13, which: 13,
-      bubbles: true, cancelable: true,
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true,
     };
     textarea.dispatchEvent(new KeyboardEvent("keydown", opts));
     textarea.dispatchEvent(new KeyboardEvent("keypress", opts));
@@ -284,7 +284,9 @@
     isStreaming = false;
 
     const finalViewer = viewer || getLatestAssistantViewer();
-    const finalText = finalViewer ? (finalViewer.textContent || "") : lastSentText;
+    const finalText = finalViewer
+      ? finalViewer.textContent || ""
+      : lastSentText;
 
     if (finalText !== lastSentText) {
       const remaining = finalText.substring(lastSentText.length);
@@ -304,23 +306,47 @@
       full_text: finalText,
     });
 
-    console.log(LOG, "Stream finished:", currentRequestId,
-      "length:", finalText.length);
+    console.log(
+      LOG,
+      "Stream finished:",
+      currentRequestId,
+      "length:",
+      finalText.length
+    );
 
     cleanup();
   }
 
   function cleanup() {
     isStreaming = false;
-    if (streamObserver) { streamObserver.disconnect(); streamObserver = null; }
-    if (loadingObserver) { loadingObserver.disconnect(); loadingObserver = null; }
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
-    if (deltaThrottleTimer) { clearTimeout(deltaThrottleTimer); deltaThrottleTimer = null; }
+    if (streamObserver) {
+      streamObserver.disconnect();
+      streamObserver = null;
+    }
+    if (loadingObserver) {
+      loadingObserver.disconnect();
+      loadingObserver = null;
+    }
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (safetyTimer) {
+      clearTimeout(safetyTimer);
+      safetyTimer = null;
+    }
+    if (deltaThrottleTimer) {
+      clearTimeout(deltaThrottleTimer);
+      deltaThrottleTimer = null;
+    }
   }
 
   // ======================================================
   // background.js からのメッセージ受信
+  //
+  // このリスナーは全 Genspark タブに存在するが、
+  // background.js は bridge タブにしかメッセージを送らないため、
+  // ユーザーの通常タブでは inject_and_send が呼ばれることはない。
   // ======================================================
 
   browser.runtime.onMessage.addListener((message, sender) => {
@@ -328,8 +354,11 @@
 
     switch (message.action) {
       case "inject_and_send": {
-        console.log(LOG, "Received inject_and_send:",
-          message.text?.substring(0, 80));
+        console.log(
+          LOG,
+          "Received inject_and_send:",
+          message.text?.substring(0, 80)
+        );
 
         if (isStreaming) {
           console.warn(LOG, "Already streaming, rejecting");
@@ -364,24 +393,23 @@
   });
 
   // ======================================================
-  // background.js のタブレジストリに自分を登録
+  // ※ registerSelf() は削除。
+  //    bridge タブの管理は background.js が主導する。
+  //    全タブに注入されるが、background.js が
+  //    tabs.sendMessage で bridge タブにのみ送信するため、
+  //    ユーザーの通常タブでは bridge 処理は発生しない。
   // ======================================================
-
-  function registerSelf() {
-    browser.runtime.sendMessage({ target: "bridge_register" });
-    console.log(LOG, "Registered with background.js");
-  }
-
-  // ページ読み込み完了後に登録
-  // (content script は document_idle で注入されるので即実行で問題ない)
-  registerSelf();
 
   // ======================================================
   // 外部公開（デバッグ用）
   // ======================================================
   ns.bridge = {
     cleanup,
-    get isStreaming() { return isStreaming; },
-    get currentRequestId() { return currentRequestId; },
+    get isStreaming() {
+      return isStreaming;
+    },
+    get currentRequestId() {
+      return currentRequestId;
+    },
   };
 })();
