@@ -47,6 +47,7 @@
         "content/search.js",
         "content/export.js",
         "content/shortcuts.js",
+        "content/bridge.js",
         "content/main.js"
       ],
       "css": [
